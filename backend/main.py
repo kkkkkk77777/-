@@ -5,20 +5,13 @@ import json
 import requests
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles # 关键：这一行之前漏了
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 
 # 1. 加载 Key
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
-
-# ================= 核心网络配置 =================
-# 必须使用 127.0.0.1 (IPv4)
-#PROXY_URL = "http://127.0.0.1:7890"
-
-# 强制 Python 所有流量走代理
-#os.environ["http_proxy"] = PROXY_URL
-#os.environ["https_proxy"] = PROXY_URL
-# ===============================================
 
 # 锁定模型
 LOCKED_MODEL_NAME = "gemini-3-pro-preview"
@@ -32,12 +25,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 纯 Requests 上传函数
+# --- 云端版上传函数 (纯Requests，无代理) ---
 def upload_file_via_requests(file_path, mime_type="video/mp4"):
     file_size = os.path.getsize(file_path)
     display_name = os.path.basename(file_path)
     
-    # --- 第1步：初始化上传 ---
     url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={API_KEY}"
     
     init_headers = {
@@ -49,71 +41,46 @@ def upload_file_via_requests(file_path, mime_type="video/mp4"):
     }
     body = {"file": {"display_name": display_name}}
     
-    print(f"📡 [1/3] 正在连接 Google API...")
-    try:
-        response = requests.post(url, headers=init_headers, json=body, timeout=30)
-        if response.status_code != 200:
-            raise Exception(f"初始化被拒绝: {response.text}")
-    except Exception as e:
-        raise Exception(f"网络连接失败: {e}")
+    print(f"📡 [1/3] 连接 Google API...")
+    # 云端直连，不需要代理设置
+    response = requests.post(url, headers=init_headers, json=body)
+    
+    if response.status_code != 200:
+        raise Exception(f"初始化失败: {response.text}")
         
     upload_url = response.headers.get("X-Goog-Upload-URL")
     
-    # --- 第2步：上传实际数据 ---
-    print(f"🚀 [2/3] 正在传输数据...")
-    
+    print(f"🚀 [2/3] 传输数据...")
     upload_headers = {
         "Content-Length": str(file_size),
         "X-Goog-Upload-Offset": "0",
         "X-Goog-Upload-Command": "upload, finalize"
     }
     
-    try:
-        with open(file_path, "rb") as f:
-            upload_resp = requests.post(
-                upload_url, 
-                headers=upload_headers, 
-                data=f,
-                timeout=300 # 上传超时
-            )
+    with open(file_path, "rb") as f:
+        upload_resp = requests.post(upload_url, headers=upload_headers, data=f)
             
-        if upload_resp.status_code != 200:
-            raise Exception(f"上传数据失败: {upload_resp.text}")
+    if upload_resp.status_code != 200:
+        raise Exception(f"上传失败: {upload_resp.text}")
             
-        file_info = upload_resp.json()
-        file_uri = file_info["file"]["uri"]
-        print(f"✅ 上传成功! File URI: {file_uri}")
-        return file_uri
-        
-    except Exception as e:
-        raise Exception(f"传输中断: {e}")
+    return upload_resp.json()["file"]["uri"]
 
-# 等待视频处理
 def wait_for_processing(file_uri):
     file_name = file_uri.split("/")[-1] 
-    print(f"⏳ [2.5/3] 等待 Google 处理视频...")
-    
+    print(f"⏳ [2.5/3] 等待处理...")
     check_url = f"https://generativelanguage.googleapis.com/v1beta/files/{file_name}?key={API_KEY}"
     
     while True:
-        resp = requests.get(check_url, timeout=10)
+        resp = requests.get(check_url)
         state = resp.json().get("state")
-        print(f"   -> 状态: {state}")
-        
-        if state == "ACTIVE":
-            return
-        elif state == "FAILED":
-            raise Exception("Google 处理视频失败")
-        
+        if state == "ACTIVE": return
+        elif state == "FAILED": raise Exception("Google 处理视频失败")
         time.sleep(2)
 
-# 生成内容 (含最新的 SOP Prompt)
 def generate_content(file_uri):
-    print(f"🤖 [3/3] AI ({LOCKED_MODEL_NAME}) 正在深度分析策略...")
-    
+    print(f"🤖 [3/3] AI ({LOCKED_MODEL_NAME}) 分析中...")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{LOCKED_MODEL_NAME}:generateContent?key={API_KEY}"
     
-    # 这里是升级后的 Prompt
     prompt_text = """
     你是一个资深全平台内容运营专家。请分析上传的素材（视频或图片），输出一份符合 Traffic Pulse Pro 标准的 JSON 策略报告。
     
@@ -135,9 +102,9 @@ def generate_content(file_uri):
         "hashtags": ["tag1", "tag2"],
         "timing_radar": {"best_time": "18:00", "reason": "下班高峰解压"},
         "ops_kit": {
-            "core_logic": "一句话解释本视频在抖音的爆款逻辑（例如：前3秒黄金矛盾点）",
-            "tags_strategy": "解释标签打法（例如：泛娱乐标签拉流量+垂直标签找人群）",
-            "dou_plus": "DOU+投放建议：人群包（如：30岁+男性，汽车兴趣）、投放目标（点赞或转化）、介入时机（如：自然播放过500后）",
+            "core_logic": "一句话解释本视频在抖音的爆款逻辑",
+            "tags_strategy": "解释标签打法",
+            "dou_plus": "DOU+投放建议：人群包、投放目标、介入时机",
             "comment_script": ["神评论1", "神评论2"]
         }
       },
@@ -148,9 +115,9 @@ def generate_content(file_uri):
         "timing_radar": {"best_time": "21:00", "reason": "睡前种草时刻"},
         "seo_keywords": ["词1", "词2"],
         "ops_kit": {
-            "core_logic": "一句话解释在小红书的种草逻辑（例如：强调利他性，提供情绪价值）",
+            "core_logic": "一句话解释在小红书的种草逻辑",
             "tags_strategy": "解释SEO标签埋点逻辑",
-            "promotion": "加热建议（署条）：建议投放‘阅读量’还是‘粉丝关注’，针对什么兴趣标签投放",
+            "promotion": "加热建议（署条）：建议投放阅读量还是关注",
             "comment_script": ["互动引导话术1", "互动引导话术2"]
         }
       },
@@ -159,10 +126,10 @@ def generate_content(file_uri):
         "social_trigger": "适合转发到朋友圈的金句",
         "timing_radar": {"best_time": "12:00", "reason": "午休资讯阅读"},
         "ops_kit": {
-            "core_logic": "一句话解释视频号的社交推荐逻辑（例如：利用家庭责任感引发转发）",
+            "core_logic": "一句话解释视频号的社交推荐逻辑",
             "tags_strategy": "解释话题标签的选择逻辑",
-            "action_plan": "冷启动动作：转发至XX群（如业主群/家族群），配文话术建议",
-            "promotion": "微信豆投放建议：是否需要投，投给什么年龄段",
+            "action_plan": "冷启动动作：转发至XX群，配文话术建议",
+            "promotion": "微信豆投放建议",
             "comment_script": ["引导点赞话术"]
         }
       }
@@ -195,12 +162,14 @@ async def analyze_video(file: UploadFile = File(...)):
     temp_path = f"tmp/{file.filename}"
     
     try:
-        # 保存本地
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
+        # 简单判断类型 (图片/视频)
+        mime = "image/jpeg" if file.filename.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) else "video/mp4"
+        
         # 1. 上传
-        file_uri = upload_file_via_requests(temp_path)
+        file_uri = upload_file_via_requests(temp_path, mime)
         
         # 2. 等待
         wait_for_processing(file_uri)
@@ -215,9 +184,8 @@ async def analyze_video(file: UploadFile = File(...)):
         return {"error": str(e)}
     finally:
         if os.path.exists(temp_path): os.remove(temp_path)
-        # ... (上面的代码保持不变) ...
 
-# --- 终极修复：挂载前端页面 (使用绝对路径) ---
+# --- 终极修复：挂载前端页面 (绝对路径 + 容错) ---
 # 1. 获取 main.py 文件所在的绝对路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -228,7 +196,6 @@ dist_dir = os.path.join(current_dir, "dist")
 if os.path.exists(dist_dir):
     app.mount("/", StaticFiles(directory=dist_dir, html=True), name="static")
 else:
-    # 如果还是找不到，为了防止报错，我们定义一个临时的根路由提示信息
     print(f"⚠️ 警告: 云端未找到 dist 文件夹。寻找路径: {dist_dir}")
     @app.get("/")
     def read_root():
