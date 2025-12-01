@@ -215,3 +215,21 @@ async def analyze_video(file: UploadFile = File(...)):
         return {"error": str(e)}
     finally:
         if os.path.exists(temp_path): os.remove(temp_path)
+        # ... (上面的代码保持不变) ...
+
+# --- 终极修复：挂载前端页面 (使用绝对路径) ---
+# 1. 获取 main.py 文件所在的绝对路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# 2. 拼接出 dist 的完整路径
+dist_dir = os.path.join(current_dir, "dist")
+
+# 3. 挂载
+if os.path.exists(dist_dir):
+    app.mount("/", StaticFiles(directory=dist_dir, html=True), name="static")
+else:
+    # 如果还是找不到，为了防止报错，我们定义一个临时的根路由提示信息
+    print(f"⚠️ 警告: 云端未找到 dist 文件夹。寻找路径: {dist_dir}")
+    @app.get("/")
+    def read_root():
+        return {"message": "后端运行正常，但 dist 文件夹未找到，请检查 GitHub 仓库是否包含 backend/dist"}
