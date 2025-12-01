@@ -5,7 +5,7 @@ import json
 import requests
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles # 关键：这一行之前漏了
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 
@@ -25,7 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 云端版上传函数 (纯Requests，无代理) ---
+# 纯 Requests 上传函数
 def upload_file_via_requests(file_path, mime_type="video/mp4"):
     file_size = os.path.getsize(file_path)
     display_name = os.path.basename(file_path)
@@ -73,26 +73,37 @@ def wait_for_processing(file_uri):
     while True:
         resp = requests.get(check_url)
         state = resp.json().get("state")
-        if state == "ACTIVE": return
-        elif state == "FAILED": raise Exception("Google 处理视频失败")
+        print(f"   -> 状态: {state}")
+        
+        if state == "ACTIVE":
+            return
+        elif state == "FAILED":
+            raise Exception("Google 处理视频失败")
+        
         time.sleep(2)
 
 def generate_content(file_uri):
     print(f"🤖 [3/3] AI ({LOCKED_MODEL_NAME}) 分析中...")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{LOCKED_MODEL_NAME}:generateContent?key={API_KEY}"
     
+    # --- 核心修改：加强中文指令 ---
     prompt_text = """
-    你是一个资深全平台内容运营专家。请分析上传的素材（视频或图片），输出一份符合 Traffic Pulse Pro 标准的 JSON 策略报告。
+    Role: Senior Content Strategy Expert (Traffic Pulse Pro).
+    Task: Analyze the media and generate a strategy JSON.
     
-    【重要】针对不同平台，你必须提供深度的运营指导：
+    【CRITICAL INSTRUCTION】
+    ALL OUTPUT MUST BE IN SIMPLIFIED CHINESE (简体中文). 
+    无论视频内容是什么语言，你必须用中文输出所有分析结果、标题和文案！
+    
+    【深度运营指导要求】：
     1. 核心逻辑：解释为什么要在这个平台这么发（例如：利用抖音的完播率机制，或小红书的搜索长尾机制）。
     2. 标签策略：不仅给标签，还要解释标签的组合逻辑（大词+精准词）。
     3. 投放/加热建议：具体到投给什么人群（性别/年龄/兴趣），在什么播放量级介入。
     
-    严格的 JSON 输出结构如下：
+    Strict JSON Structure:
     {
       "visual_analysis": {
-        "summary": "画面内容描述",
+        "summary": "画面内容描述(中文)",
         "tags": ["视觉标签1", "视觉标签2"],
         "emotion": "情绪基调 (S/A/B)",
         "highlights": ["高光时刻1", "高光时刻2"]
@@ -100,7 +111,7 @@ def generate_content(file_uri):
       "douyin": {
         "titles": ["悬念标题A", "反转标题B", "痛点标题C"],
         "hashtags": ["tag1", "tag2"],
-        "timing_radar": {"best_time": "18:00", "reason": "下班高峰解压"},
+        "timing_radar": {"best_time": "18:00", "reason": "下班高峰解压(中文)"},
         "ops_kit": {
             "core_logic": "一句话解释本视频在抖音的爆款逻辑",
             "tags_strategy": "解释标签打法",
@@ -110,9 +121,9 @@ def generate_content(file_uri):
       },
       "xiaohongshu": {
         "titles": ["Emoji标题A", "干货标题B"],
-        "content": "正文内容...",
+        "content": "正文内容(中文)...",
         "cover_design": {"layout": "3:4拼图", "text": "封面花字建议", "visual_elements": "视觉元素建议"},
-        "timing_radar": {"best_time": "21:00", "reason": "睡前种草时刻"},
+        "timing_radar": {"best_time": "21:00", "reason": "睡前种草时刻(中文)"},
         "seo_keywords": ["词1", "词2"],
         "ops_kit": {
             "core_logic": "一句话解释在小红书的种草逻辑",
@@ -185,18 +196,14 @@ async def analyze_video(file: UploadFile = File(...)):
     finally:
         if os.path.exists(temp_path): os.remove(temp_path)
 
-# --- 终极修复：挂载前端页面 (绝对路径 + 容错) ---
-# 1. 获取 main.py 文件所在的绝对路径
+# --- 挂载前端页面 ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
-
-# 2. 拼接出 dist 的完整路径
 dist_dir = os.path.join(current_dir, "dist")
 
-# 3. 挂载
 if os.path.exists(dist_dir):
     app.mount("/", StaticFiles(directory=dist_dir, html=True), name="static")
 else:
-    print(f"⚠️ 警告: 云端未找到 dist 文件夹。寻找路径: {dist_dir}")
+    print(f"⚠️ 警告: 云端未找到 dist 文件夹。")
     @app.get("/")
     def read_root():
-        return {"message": "后端运行正常，但 dist 文件夹未找到，请检查 GitHub 仓库是否包含 backend/dist"}
+        return {"message": "后端运行正常，但 dist 文件夹未找到，请检查 GitHub 仓库"}
