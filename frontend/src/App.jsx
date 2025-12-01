@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { 
   UploadCloud, Layout, Smartphone, Instagram, Monitor, 
-  Clock, Hash, MessageCircle, Share2, Layers, Search, Settings, 
-  Copy, Check, ChevronRight, Trash2
+  Clock, Hash, MessageCircle, Share2, Layers, Settings, 
+  Copy, Check, ChevronRight, Trash2, Play, AlertCircle, Sparkles
 } from 'lucide-react';
 import './App.css';
 
@@ -14,22 +14,83 @@ const PLATFORMS = {
 };
 
 function App() {
-  const [currentView, setCurrentView] = useState('workspace'); // workspace | history
+  const [currentView, setCurrentView] = useState('workspace'); 
   const [activeTab, setActiveTab] = useState('xiaohongshu');
+  
+  // 核心状态管理
   const [file, setFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
-  const [loading, setLoading] = useState(false);
+  
+  // 流程状态
+  const [uploadProgress, setUploadProgress] = useState(0); // 0-100
+  const [isUploading, setIsUploading] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  
   const [result, setResult] = useState(null);
   const [historyList, setHistoryList] = useState([]);
   const [copiedIndex, setCopiedIndex] = useState(null); 
 
-  // 初始化加载历史记录
+  const currentPlatform = PLATFORMS[activeTab];
+
+  // 初始化历史记录
   useEffect(() => {
     const saved = localStorage.getItem('traffic_pulse_history');
     if (saved) setHistoryList(JSON.parse(saved));
   }, []);
 
-  // 保存历史记录
+  // 1. 仅选择文件，不上传
+  const handleFileSelect = (event) => {
+    const selectedFile = event.target.files[0];
+    if (!selectedFile) return;
+
+    // 重置所有状态
+    setFile(selectedFile);
+    setPreviewUrl(URL.createObjectURL(selectedFile));
+    setResult(null);
+    setUploadProgress(0);
+    setIsUploading(false);
+    setIsAnalyzing(false);
+    setCurrentView('workspace');
+  };
+
+  // 2. 点击按钮，开始上传并分析
+  const startAnalysis = async () => {
+    if (!file) return;
+
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      // 发送请求 (带进度监听)
+      const response = await axios.post('/analyze', formData, {
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setUploadProgress(percentCompleted);
+          if (percentCompleted === 100) {
+            setIsUploading(false);
+            setIsAnalyzing(true); // 上传完，进入分析等待
+          }
+        }
+      });
+
+      const data = response.data;
+      if (data.error) throw new Error(data.error);
+
+      setResult(data);
+      saveToHistory(data, file.name);
+    } catch (err) {
+      alert(`分析失败: ${err.message || "请检查后端是否启动"}`);
+      console.error(err);
+    } finally {
+      setIsUploading(false);
+      setIsAnalyzing(false);
+    }
+  };
+
+  // 保存历史
   const saveToHistory = (analysisResult, fileName) => {
     const newItem = {
       id: Date.now(),
@@ -43,7 +104,6 @@ function App() {
     localStorage.setItem('traffic_pulse_history', JSON.stringify(updated));
   };
 
-  // 删除历史
   const deleteHistory = (e, id) => {
     e.stopPropagation();
     const updated = historyList.filter(item => item.id !== id);
@@ -51,40 +111,12 @@ function App() {
     localStorage.setItem('traffic_pulse_history', JSON.stringify(updated));
   };
 
-  // 复制功能
   const handleCopy = (text, index) => {
     navigator.clipboard.writeText(text);
     setCopiedIndex(index);
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
-  const handleUpload = async (event) => {
-    const selectedFile = event.target.files[0];
-    if (!selectedFile) return;
-
-    setFile(selectedFile);
-    setPreviewUrl(URL.createObjectURL(selectedFile));
-    setLoading(true);
-    setResult(null);
-    setCurrentView('workspace');
-
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-
-    try {
-      const response = await axios.post('analyze', formData);
-      const data = response.data;
-      setResult(data);
-      saveToHistory(data, selectedFile.name); 
-    } catch (err) {
-      alert("分析失败，请检查后端！");
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 恢复历史记录
   const restoreHistory = (item) => {
     setResult(item.data);
     setActiveTab(item.platform);
@@ -93,32 +125,36 @@ function App() {
     setCurrentView('workspace');
   };
 
-  const currentPlatform = PLATFORMS[activeTab];
-
-  // --- 渲染策略面板 (核心逻辑) ---
+  // --- 渲染策略面板 ---
   const renderStrategyPanel = () => {
-    if (loading) return (
+    // 状态A: 正在分析中 (Loading 界面)
+    if (isAnalyzing) return (
       <div className="scanning-effect" style={{color: currentPlatform.accent}}>
-        <div className="scan-line" style={{background: currentPlatform.accent, boxShadow: `0 0 10px ${currentPlatform.accent}`}}></div>
-        <p>🧠 AI 大脑正在疯狂运转...</p>
-        <p>👁️ 识别画面细节与情绪...</p>
-        <p>🚀 正在生成{currentPlatform.name}深度策略...</p>
+        <div className="scan-icon-wrapper">
+           <Sparkles size={48} className="pulse-icon"/>
+        </div>
+        <h3>AI 大脑正在深度思考...</h3>
+        <p>🧠 正在解析视频语义与情感...</p>
+        <p>✍️ 正在根据{currentPlatform.name}算法撰写策略...</p>
+        <div className="loading-bar"><div className="loading-fill" style={{background: currentPlatform.accent}}></div></div>
       </div>
     );
 
+    // 状态B: 还没开始分析 (空状态)
     if (!result) return (
       <div className="empty-state">
-        <div className="empty-icon" style={{color: currentPlatform.accent, opacity: 0.5}}>{currentPlatform.icon}</div>
-        <p>请在左侧上传素材<br/>生成 <strong>{currentPlatform.name}</strong> 策略</p>
+        <div className="empty-icon" style={{color: currentPlatform.accent, opacity: 0.3}}>{currentPlatform.icon}</div>
+        <p>请点击左侧 <strong>“开始智能分析”</strong> <br/>生成 {currentPlatform.name} 专属策略</p>
       </div>
     );
 
+    // 状态C: 显示结果
     const data = result[activeTab];
     if (!data) return <div className="empty-state">无该平台数据</div>;
 
     return (
       <div className="strategy-content animate-in">
-        {/* 1. 文案工坊 */}
+        {/* 文案工坊 */}
         <div className="module-card">
           <div className="module-title" style={{borderBottomColor: currentPlatform.accent}}>
             ✍️ 智能文案 (点击复制)
@@ -157,23 +193,7 @@ function App() {
           )}
         </div>
 
-        {/* 2. 视觉/封面工坊 (仅小红书) */}
-        {activeTab === 'xiaohongshu' && data.cover_design && (
-          <div className="module-card visual-engine">
-            <div className="module-title" style={{borderBottomColor: currentPlatform.accent}}>
-              🎨 封面工坊
-            </div>
-            <div className="cover-mockup">
-               <div className="cover-text">{data.cover_design.text}</div>
-            </div>
-            <div className="cover-info">
-               <p>📐 布局: {data.cover_design.layout}</p>
-               <p>💡 建议: {data.cover_design.visual_elements}</p>
-            </div>
-          </div>
-        )}
-
-        {/* 3. 择时雷达 */}
+        {/* 择时雷达 */}
         <div className="module-card radar-module">
           <div className="module-title" style={{borderBottomColor: currentPlatform.accent}}>📡 择时雷达</div>
           <div className="radar-display">
@@ -182,49 +202,38 @@ function App() {
           </div>
         </div>
 
-        {/* 4. 深度运营 SOP (最新升级) */}
+        {/* 深度运营 SOP */}
         <div className="module-card sop-module">
-          <div className="module-title" style={{borderBottomColor: currentPlatform.accent}}>
-            🚀 深度运营 SOP
-          </div>
+          <div className="module-title" style={{borderBottomColor: currentPlatform.accent}}>🚀 深度运营 SOP</div>
           
-          {/* 核心爆款逻辑 */}
           {data.ops_kit?.core_logic && (
             <div className="sop-section">
               <div className="sop-label">💡 核心爆款逻辑</div>
               <div className="sop-content highlight">{data.ops_kit.core_logic}</div>
             </div>
           )}
-
-          {/* 标签策略分析 */}
+          
           {data.ops_kit?.tags_strategy && (
             <div className="sop-section">
-              <div className="sop-label">🏷️ 标签打法分析</div>
+              <div className="sop-label">🏷️ 标签打法</div>
               <div className="sop-content">{data.ops_kit.tags_strategy}</div>
             </div>
           )}
 
-          {/* 投放/加热建议 */}
           {(data.ops_kit?.dou_plus || data.ops_kit?.promotion || data.ops_kit?.action_plan) && (
             <div className="sop-section">
-              <div className="sop-label">🔥 投放与加热策略</div>
+              <div className="sop-label">🔥 投放与加热</div>
               <div className="sop-content">
                 {activeTab === 'douyin' && data.ops_kit.dou_plus}
                 {activeTab === 'xiaohongshu' && data.ops_kit.promotion}
-                {activeTab === 'wechat' && (
-                  <>
-                    <div>{data.ops_kit.action_plan}</div>
-                    <div style={{marginTop:'8px', opacity:0.8}}>{data.ops_kit.promotion}</div>
-                  </>
-                )}
+                {activeTab === 'wechat' && data.ops_kit.action_plan}
               </div>
             </div>
           )}
 
-          {/* 评论区剧本 */}
           {data.ops_kit?.comment_script && (
             <div className="sop-section">
-              <div className="sop-label">💬 评论区预埋</div>
+              <div className="sop-label">💬 评论预埋</div>
               <ul className="sop-list">
                 {data.ops_kit.comment_script.map((s,i)=><li key={i}>{s}</li>)}
               </ul>
@@ -235,30 +244,24 @@ function App() {
     );
   };
 
-  // --- 渲染历史记录页面 ---
   const renderHistoryView = () => (
     <div className="history-view animate-in">
       <div className="view-header">
         <h2><Clock size={24}/> 历史生成记录</h2>
         <button className="back-btn" onClick={() => setCurrentView('workspace')}>返回工作台</button>
       </div>
-      
       {historyList.length === 0 ? (
-        <div className="empty-history">暂无记录，快去生成第一条爆款吧！</div>
+        <div className="empty-history">暂无记录</div>
       ) : (
         <div className="history-list">
           {historyList.map(item => (
             <div key={item.id} className="history-item" onClick={() => restoreHistory(item)}>
-              <div className="h-icon" style={{color: PLATFORMS[item.platform].color}}>
-                {PLATFORMS[item.platform].icon}
-              </div>
+              <div className="h-icon" style={{color: PLATFORMS[item.platform].color}}>{PLATFORMS[item.platform].icon}</div>
               <div className="h-info">
                 <div className="h-title">{item.fileName}</div>
-                <div className="h-date">{item.date} · {PLATFORMS[item.platform].name}策略</div>
+                <div className="h-date">{item.date} · {PLATFORMS[item.platform].name}</div>
               </div>
-              <button className="delete-btn" onClick={(e) => deleteHistory(e, item.id)}>
-                <Trash2 size={16}/>
-              </button>
+              <button className="delete-btn" onClick={(e) => deleteHistory(e, item.id)}><Trash2 size={16}/></button>
               <ChevronRight size={16} className="arrow"/>
             </div>
           ))}
@@ -269,20 +272,14 @@ function App() {
 
   return (
     <div className="app-container">
-      {/* Sidebar */}
+      {/* 1. Sidebar */}
       <div className="sidebar">
         <div className="logo">Traffic Pulse Pro</div>
-        
         <div className="nav-group">
           <div className="nav-label">核心功能</div>
-          <button className={`nav-btn ${currentView==='workspace'?'active':''}`} onClick={()=>setCurrentView('workspace')}>
-            <Layers size={18}/> 工作台
-          </button>
-          <button className={`nav-btn ${currentView==='history'?'active':''}`} onClick={()=>setCurrentView('history')}>
-            <Clock size={18}/> 历史记录
-          </button>
+          <button className={`nav-btn ${currentView==='workspace'?'active':''}`} onClick={()=>setCurrentView('workspace')}><Layers size={18}/> 工作台</button>
+          <button className={`nav-btn ${currentView==='history'?'active':''}`} onClick={()=>setCurrentView('history')}><Clock size={18}/> 历史记录</button>
         </div>
-
         {currentView === 'workspace' && (
           <div className="nav-group">
             <div className="nav-label">目标平台</div>
@@ -298,75 +295,91 @@ function App() {
             ))}
           </div>
         )}
-        
         <div className="spacer"></div>
         <div className="menu-item"><Settings size={20}/> 设置</div>
       </div>
 
-      {/* Main Content */}
+      {/* 2. Content Area */}
       {currentView === 'history' ? (
-        <div className="main-area full-width">
-          {renderHistoryView()}
-        </div>
+        <div className="main-area full-width">{renderHistoryView()}</div>
       ) : (
         <>
+          {/* 中间：预览与操作区 */}
           <div className="preview-area">
             <div className="preview-header">
-               <span>{file ? file.name : "准备就绪"}</span>
-               <span className="status-dot" style={{color: currentPlatform.accent}}>
-                 {result ? "● 分析完成" : "○ 等待素材"}
-               </span>
+               <span className="file-name">{file ? file.name : "请上传素材"}</span>
+               {file && <span className="file-size">{file.type}</span>}
             </div>
             
-            <div className="player-wrapper" style={{borderColor: loading ? currentPlatform.accent : '#334155'}}>
+            {/* 播放器容器：不再是黑洞，而是预览窗口 */}
+            <div className="player-wrapper">
               {!file ? (
                 <div className="upload-black-hole">
-                   <input type="file" onChange={handleUpload} accept={currentPlatform.accept} />
-                   <div className="hole-animation" style={{color: currentPlatform.accent}}>
-                      <UploadCloud size={48} />
-                   </div>
+                   <input type="file" onChange={handleFileSelect} accept={currentPlatform.accept} />
+                   <div className="hole-animation" style={{color: currentPlatform.accent}}><UploadCloud size={48} /></div>
                    <p className="hole-title" style={{color: currentPlatform.accent}}>{currentPlatform.uploadText}</p>
                    <p className="hole-sub">点击或拖拽文件至此</p>
                 </div>
               ) : (
                 <div className="media-container">
+                  {/* 核心修改：object-fit contain 解决裁剪问题 */}
                   {previewUrl ? (
                     file.type?.startsWith('video') ? 
                       <video src={previewUrl} controls className="main-media" /> : 
                       <img src={previewUrl} className="main-media" />
                   ) : (
-                    <div className="no-preview">
-                      <Layout size={48} color="#475569"/>
-                      <p>历史记录模式暂不支持预览原文件</p>
-                    </div>
+                    <div className="no-preview"><Layout size={48}/><p>历史记录模式不可预览</p></div>
                   )}
+                  
+                  {/* 替换按钮 */}
                   <div className="reupload-btn">
-                    <input type="file" onChange={handleUpload} accept={currentPlatform.accept} />
-                    <Layout size={14}/> 替换素材
+                    <input type="file" onChange={handleFileSelect} accept={currentPlatform.accept} />
+                    <Layout size={14}/> 替换
                   </div>
                 </div>
               )}
             </div>
-            {/* 视觉报告摘要 */}
-            {result && (
-               <div className="vision-report" style={{borderLeftColor: currentPlatform.accent}}>
-                  <h4>👁️ AI 视觉诊断报告</h4>
-                  <div className="tag-cloud">
-                     {result.visual_analysis.tags.map(t => <span key={t}>#{t}</span>)}
-                     <span className="score" style={{background: currentPlatform.accent}}>
-                       {result.visual_analysis.emotion}
-                     </span>
+
+            {/* 操作控制台 */}
+            {file && (
+              <div className="control-panel">
+                {!isUploading && !isAnalyzing && !result && (
+                  <button className="analyze-btn" onClick={startAnalysis} style={{background: currentPlatform.accent}}>
+                    <Sparkles size={20}/> 开始智能分析
+                  </button>
+                )}
+
+                {/* 上传进度条 */}
+                {isUploading && (
+                  <div className="progress-container">
+                    <div className="progress-info">
+                      <span>正在上传素材...</span>
+                      <span>{uploadProgress}%</span>
+                    </div>
+                    <div className="progress-track">
+                      <div className="progress-bar" style={{width: `${uploadProgress}%`, background: currentPlatform.accent}}></div>
+                    </div>
                   </div>
-                  <p>{result.visual_analysis.summary}</p>
-               </div>
+                )}
+
+                {/* 结果摘要 */}
+                {result && (
+                   <div className="vision-report" style={{borderLeftColor: currentPlatform.accent}}>
+                      <h4><Check size={16}/> 分析完成</h4>
+                      <div className="tag-cloud">
+                         {result.visual_analysis.tags.map(t => <span key={t}>#{t}</span>)}
+                      </div>
+                      <p>{result.visual_analysis.summary}</p>
+                   </div>
+                )}
+              </div>
             )}
           </div>
 
+          {/* 右侧：策略面板 */}
           <div className="strategy-panel">
-            <div className="panel-header">策略结果</div>
-            <div className="panel-body">
-               {renderStrategyPanel()}
-            </div>
+            <div className="panel-header">AI 策略生成结果</div>
+            <div className="panel-body">{renderStrategyPanel()}</div>
           </div>
         </>
       )}
